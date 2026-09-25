@@ -1,5 +1,6 @@
 import { useStore } from '@nanostores/react';
 import { ClientOnly } from 'remix-utils/client-only';
+import { UserMenu } from '~/components/auth/UserMenu';
 import { chatStore } from '~/lib/stores/chat';
 import { classNames } from '~/utils/classNames';
 import { HeaderActionButtons } from './HeaderActionButtons.client';
@@ -36,6 +37,7 @@ export function Header() {
           )}
         </ClientOnly>
       )}
+      <ClientOnly>{() => <UserMenu />}</ClientOnly>
     </header>
   );
 }

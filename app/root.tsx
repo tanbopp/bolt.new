@@ -1,7 +1,9 @@
 import { useStore } from '@nanostores/react';
-import type { LinksFunction } from '@remix-run/cloudflare';
+import { json, type LoaderFunctionArgs, type LinksFunction } from '@remix-run/cloudflare';
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from '@remix-run/react';
 import tailwindReset from '@unocss/reset/tailwind-compat.css?url';
+import { ToastProvider } from './components/ui/Toast';
+import { isPublicRoute, requireSession } from './lib/supabase/middleware';
 import { themeStore } from './lib/stores/theme';
 import { stripIndents } from './utils/stripIndent';
 import { createHead } from 'remix-island';
@@ -71,13 +73,46 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {children}
-      <ScrollRestoration />
-      <Scripts />
+      <ToastProvider>
+        {children}
+        <ScrollRestoration />
+        <Scripts />
+      </ToastProvider>
     </>
   );
 }
 
 export default function App() {
+  useEffect(() => {
+    /**
+     * Penanda hidrasi untuk E2E (Playwright).
+     *
+     * Halaman di-render server, jadi elemen form sudah ada di DOM sebelum React
+     * ter-hidrasi. Bila test men-submit form sebelum hidrasi selesai, browser
+     * melakukan submit native (GET dengan query string). Test menunggu atribut
+     * ini dulu supaya interaksi selalu terjadi setelah hidrasi.
+     */
+    document.documentElement.dataset.hydrated = 'true';
+  }, []);
+
   return <Outlet />;
+}
+
+/**
+ * Proteksi route (setara middleware).
+ *
+ * Remix tidak punya middleware global, jadi guard dijalankan di loader root —
+ * loader ini dieksekusi sebelum render untuk semua route, baik SSR maupun
+ * navigasi client. Route publik dikecualikan (lihat `PUBLIC_ROUTES`).
+ */
+export async function loader({ request, context }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+
+  if (isPublicRoute(url.pathname)) {
+    return json({});
+  }
+
+  const { headers } = await requireSession(request, context.cloudflare.env);
+
+  return json({}, { headers });
 }
