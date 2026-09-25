@@ -4,7 +4,21 @@ import { getNamingConventionRule, tsFileExtensions } from '@blitz/eslint-plugin/
 
 export default [
   {
-    ignores: ['**/dist', '**/node_modules', '**/.wrangler', '**/bolt/build'],
+    /**
+     * `build/`, `test-results/`, dan `playwright-report/` adalah artefak hasil
+     * build/test (sudah ada di `.gitignore`) — tanpa di-ignore, ESLint ikut
+     * memindai bundel hasil build dan menjadi sangat lambat.
+     */
+    ignores: [
+      '**/dist',
+      '**/node_modules',
+      '**/.wrangler',
+      '**/bolt/build',
+      'build/**',
+      'test-results/**',
+      'playwright-report/**',
+      'blob-report/**',
+    ],
   },
   ...blitzPlugin.configs.recommended(),
   {
@@ -28,7 +42,13 @@ export default [
   },
   {
     files: [...tsFileExtensions, ...jsFileExtensions, '**/*.tsx'],
-    ignores: ['functions/*'],
+
+    /**
+     * `tests/**` dikecualikan: alias `~/` hanya berlaku untuk folder `app/`
+     * (lihat `tsconfig.json`), sedangkan Playwright tidak menjalankan resolver
+     * path tsconfig, jadi test E2E wajib memakai import relatif.
+     */
+    ignores: ['functions/*', 'tests/**'],
     rules: {
       'no-restricted-imports': [
         'error',
