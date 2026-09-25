@@ -10,6 +10,14 @@ export default defineConfig((config) => {
     build: {
       target: 'esnext',
     },
+
+    /**
+     * Env Supabase hanya diekspos ke client bila namanya cocok dengan prefix di bawah.
+     * Nama mengikuti `.env` yang disediakan (SUPABASE_URL, SUPABASE_ANON_KEY) — tidak
+     * membuat nama baru. `SUPABASE_SERVICE_ROLE_KEY` dan `SUPABASE_JWT_SECRET` sengaja
+     * TIDAK ikut, supaya tidak pernah masuk bundel client.
+     */
+    envPrefix: ['VITE_', 'SUPABASE_URL', 'SUPABASE_ANON_KEY'],
     plugins: [
       nodePolyfills({
         include: ['path', 'buffer'],
