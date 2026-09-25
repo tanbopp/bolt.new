@@ -52,3 +52,75 @@ Bolt.new supports most popular JavaScript frameworks and libraries. If it runs o
 
 **How can I add make sure my framework/project works well in bolt?**  
 We are excited to work with the JavaScript ecosystem to improve functionality in Bolt. Reach out to us via [hello@stackblitz.com](mailto:hello@stackblitz.com) to discuss how we can partner!
+
+---
+
+# Setup Auth & User Layer (Tahapan 1 — Tanecode)
+
+Bagian ini khusus untuk fork Tanecode (`tanbopp/bolt.new`). Tahapan 1 mengganti
+lapisan identitas dengan **Supabase Auth** (Google, GitHub, Email/Password) dan
+menambahkan tabel profil `public.users`.
+
+## 1. Env
+
+Salin `.env` (disediakan user) menjadi `.env.local` — Remix Vite membaca
+`.env.local` untuk `process.env`, sedangkan browser membaca `SUPABASE_URL` dan
+`SUPABASE_ANON_KEY` lewat `envPrefix` di `vite.config.ts`.
+
+```bash
+cp .env .env.local   # Windows: Copy-Item .env .env.local -Force
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` dan `SUPABASE_JWT_SECRET` tidak pernah diakses kode
+aplikasi (hanya test runner yang membaca service role key dari `.env.local`).
+
+## 2. Jalankan migrasi tabel `users`
+
+Buka **Supabase Dashboard → SQL Editor**, tempel isi
+[`supabase/migrations/0001_users.sql`](./supabase/migrations/0001_users.sql),
+lalu **Run**. Alternatif via CLI:
+
+```bash
+supabase link --project-ref <project-ref>
+supabase db push
+```
+
+Migrasi membuat tabel `public.users`, index email, RLS (`users_select_own`,
+`users_update_own`), dan trigger `on_auth_user_created` yang otomatis mengisi
+profil setiap kali user baru signup.
+
+> Belum dijalankan? Aplikasi tetap jalan, tapi test yang memeriksa tabel akan
+> di-skip dan halaman `/account` menampilkan catatan bahwa tabel belum ada.
+
+## 3. Aktifkan provider auth
+
+Supabase Dashboard → **Authentication → Providers**:
+
+1. **Email** — sudah aktif secara default. Untuk development, matikan
+   "Confirm email" bila ingin langsung login setelah signup.
+2. **Google** — butuh Client ID & Secret dari Google Cloud Console
+   (OAuth 2.0 Client, redirect URI:
+   `https://<project-ref>.supabase.co/auth/v1/callback`).
+3. **GitHub** — Client ID & Secret sudah tersedia di `.env`
+   (`GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`), callback URL
+   `https://<project-ref>.supabase.co/auth/v1/callback`.
+
+Lalu di **Authentication → URL Configuration**:
+
+- **Site URL**: `http://localhost:5173` (development) / domain produksi.
+- **Redirect URLs**: `http://localhost:5173/auth/callback` dan
+  `https://<domain-produksi>/auth/callback`.
+
+Tanpa langkah ini, tombol OAuth akan gagal dengan pesan
+"Provider OAuth ini belum diaktifkan di project Supabase." (bukan error pada
+kode aplikasi).
+
+## 4. Test
+
+```bash
+pnpm exec playwright test
+```
+
+Test membaca kredensial dari `.env.local` (termasuk service role key untuk
+membuat/menghapus user test), jadi file itu wajib ada.
+
