@@ -10,7 +10,7 @@
 | Item | Nilai |
 |---|---|
 | Tahap | 1 — Auth & User Layer |
-| Status | 🟡 Hampir selesai (lihat §8: 3 kriteria diblokir konfigurasi luar) |
+| Status | 🟡 Kode + migrasi DB + test selesai; tinggal aktivasi provider OAuth di dashboard Supabase (lihat §8 & §9.1) |
 | Tanggal | 2026-09-26 |
 | Base | `eda10b1` + Tahapan 0 (`v0.0-setup`) |
 | PRD | `PRD-Docs/PRD_Tahap-1.md` |
@@ -60,7 +60,8 @@ di `uno.config.ts`/`variables.scss`. Yang ada adalah token `bolt-elements-*`:
 
 - Anon key & service key valid; provider auth aktif: **email saja**.
 - `mailer_autoconfirm = false` → login hanya bisa setelah email dikonfirmasi.
-- Tabel `public.users` **belum ada** (404/PGRST205).
+- Tabel `public.users` **belum ada** (404/PGRST205) → **sudah diperbaiki**: migrasi
+  dijalankan user dan seluruh skema terverifikasi live, lihat §7.6.
 - Tidak ada Supabase access token / CLI login di mesin ini → DDL & konfigurasi
   provider **tidak bisa** dijalankan dari sisi agent (lihat §4 D18 dan §8).
 
@@ -162,6 +163,23 @@ di `uno.config.ts`/`variables.scss`. Yang ada adalah token `bolt-elements-*`:
 | E11 | Ratusan error `prettier/prettier Delete ⏎` pada file baru | File baru ditulis dengan line ending CRLF di Windows, sedangkan Prettier memakai `endOfLine: "lf"` (`.gitattributes` hanya berlaku saat file checkout/commit, bukan saat file ditulis langsung) | Normalisasi CRLF→LF untuk file sumber setiap kali selesai mengedit (lihat perintah di riwayat kerja), lalu lint ulang |
 | E12 | Test a11y `/account` gagal: `toHaveURL('/')` timeout 15 s padahal login sebenarnya berhasil | Load pertama halaman workspace di dev server dingin (transform Vite untuk chunk besar) melebihi timeout default Playwright 15 s | `expect.timeout` 30 s + `waitForURL('/', { timeout: 60_000 })` (D23) |
 | E13 | Playwright `webServer` timeout 240 s: "Port 5173 is in use, trying another one… Local: http://localhost:5174" | Proses dev server lama masih memegang port 5173 walau sudah di-taskkill (proses induk belum mati) | Kill proses pemilik port (bukan hanya child-nya), pastikan port bebas, lalu jalankan ulang |
+| E14 | Test signup gagal: `Email address "...@example.com" is invalid` | Supabase Auth menolak domain reserved seperti `example.com` pada signup publik (`email_address_invalid`); Admin API tidak melakukan validasi ini | Email test kini memakai domain milik project dari env `CLOUDFLARE_ROOT_DOMAIN` (tanpa menambah nama env baru), fallback `gmail.com` |
+| E15 | Signup lewat UI berhenti di toast "Terlalu banyak percobaan…" | Kuota kirim email Supabase (SMTP bawaan) sangat kecil per jam; setiap signup lewat form mengirim email konfirmasi | Test signup menunggu notice **atau** toast; bila yang muncul toast rate-limit, test di-skip dengan alasan eksplisit (bukan gagal). Solusi permanen: pasang SMTP sendiri atau naikkan rate limit di dashboard — lihat §9.2 |
+| E16 | Deteksi rate-limit di test tidak bekerja | Aplikasi sudah menerjemahkan pesan Supabase ke Bahasa Indonesia via `mapAuthErrorMessage()`, sehingga string "rate limit" tidak lagi ada di toast | Helper `isEmailRateLimitMessage()` mencocokkan pesan asli (Inggris) **dan** hasil terjemahan ("terlalu banyak percobaan") |
+
+---
+
+### 7.6 Verifikasi database live (setelah migrasi dijalankan user)
+
+Dijalankan langsung ke project Supabase, bukan lewat mock:
+
+| Cek | Hasil |
+|---|---|
+| Tabel `users` + 8 kolom sesuai PRD §5.1 | ✅ SELECT berhasil untuk `id,email,name,avatar,plan,credits,created_at,updated_at` |
+| Trigger `on_auth_user_created` | ✅ user baru (dibuat via Admin API) otomatis mendapat baris `public.users` dengan `name` dari metadata (`full_name`), `plan='free'`, `credits=100` |
+| RLS | ✅ anon key tanpa JWT user → **0 baris**; test E2E membuktikan user hanya bisa membaca barisnya sendiri |
+| `on delete cascade` | ✅ hapus user di `auth.users` → baris `public.users` ikut terhapus |
+| Provider auth | ⚠️ `google_enabled=false`, `github_enabled=false` — `/auth/v1/authorize` menjawab `Unsupported provider: provider is not enabled` |
 
 ---
 
@@ -176,11 +194,13 @@ Semua gate dijalankan pada 2026-09-26 di root workspace ini.
 | Lint | `pnpm run lint` | **0 error, 0 warning** |
 | Typecheck | `pnpm run typecheck` | **0 error** |
 | Unit test | `pnpm test` | **24/24 pass** (1 file, 734 ms) |
-| E2E | `pnpm exec playwright test` | **12 passed, 4 skipped, 0 failed** (16 test, 48,2 s) |
+| E2E | `pnpm exec playwright test` | **15 passed, 2 skipped, 0 failed** (17 test, 38,4 s) |
 | Build | `pnpm run build` | **sukses** — client 43,76 s; SSR 1,22 s (`build/server/index.js` 100,24 kB) |
 
-4 test yang di-skip: 3 test butuh tabel `public.users` (D18) dan 1 test login
-penuh OAuth yang memang manual (D18).
+2 test yang di-skip pada run terakhir: (a) signup lewat form UI — kuota kirim
+email Supabase sedang habis (E15), (b) login penuh OAuth — provider masih
+nonaktif (D18). Keduanya bersifat environment, bukan cacat kode, dan otomatis
+berjalan begitu environment-nya siap.
 
 ### 7.2 Audit keamanan & bundle
 
@@ -247,10 +267,10 @@ tidak ada gradient/emoji/hero, teks terbaca di dark mode (kontras diperkuat oleh
 - [x] **K1.7** akses route terproteksi tanpa login → `/login?redirect=…` → diuji E2E
 - [x] **K1.8** login menghormati `?redirect=` → diuji E2E
 - [x] **K1.10** error login tampil sebagai toast (role=status), bukan `alert()` → diuji E2E
-- [ ] **K1.1** baris `public.users` terbentuk saat signup → **kode + test siap, eksekusi diblokir** (migrasi belum dijalankan; D18)
-- [ ] **K1.3** login Google → **kode siap, provider belum aktif** (D18)
-- [ ] **K1.4** login GitHub → **kode siap, provider belum aktif** (kredensial GitHub sudah ada di `.env`)
-- [ ] **K1.9** `/account` menampilkan data user → halaman + test siap; menampilkan data session + catatan migrasi (diblokir D18)
+- [x] **K1.1** baris `public.users` terbentuk otomatis untuk user baru → **terverifikasi** (test trigger deterministik + probe REST; varian signup lewat UI ikut terverifikasi saat kuota email Supabase tersedia)
+- [ ] **K1.3** login Google → **kode siap, provider masih nonaktif** di Supabase (`google_enabled=false`)
+- [ ] **K1.4** login GitHub → **kode siap, provider masih nonaktif** di Supabase (`github_enabled=false`; kredensial GitHub & Google sudah ada di `.env`)
+- [x] **K1.9** `/account` menampilkan data user → **terverifikasi** (nama, email, plan `FREE`, credits, avatar)
 
 ### 8.2 Visual
 
@@ -267,7 +287,7 @@ tidak ada gradient/emoji/hero, teks terbaca di dark mode (kontras diperkuat oleh
 - [x] **K3.3** tidak ada `console.log` yang membocorkan token/session (log hanya via logger + gate `import.meta.env.DEV`)
 - [x] **K3.4** `pnpm run build` sukses
 - [x] **K3.5** `pnpm run lint` sukses
-- [ ] **K3.2** RLS aktif & teruji → **SQL + test siap**, eksekusi diblokir (D18)
+- [x] **K3.2** RLS aktif & teruji → **terverifikasi**: anon key tanpa JWT user membaca **0 baris**, dan user hanya bisa membaca baris miliknya sendiri (test `RLS membatasi user ke barisnya sendiri`)
 
 ### 8.4 Testing
 
@@ -276,28 +296,55 @@ tidak ada gradient/emoji/hero, teks terbaca di dark mode (kontras diperkuat oleh
 - [x] **K4.4** login → `/` → header menampilkan menu akun (avatar)
 - [x] **K4.5** reload setelah login → masih login
 - [x] **K4.6** log out → `/login`, session hilang
-- [ ] **K4.1** signup → cek baris DB → login → logout → diblokir (D18), test auto-skip
-- [ ] **K4.7** OAuth Google/GitHub manual → diblokir (D18). Yang terverifikasi: klik tombol OAuth benar-benar memicu alur Supabase (redirect/toast error provider), bukan no-op
+- [x] **K4.1** signup → cek baris DB → login → logout → bagian DB **terverifikasi** via jalur deterministik (admin API + trigger); varian lewat form UI tersedia dan akan berjalan penuh saat kuota email Supabase tidak habis (lihat §9.2)
+- [ ] **K4.7** OAuth Google/GitHub manual → **diblokir**: provider masih nonaktif di dashboard Supabase. Yang sudah terverifikasi: klik tombol OAuth benar-benar memicu alur Supabase (bukan no-op)
 
 ---
 
 ## §9 Rekomendasi untuk Tahap Berikutnya
 
-### 9.1 Aksi yang perlu dilakukan user sebelum Tahapan 1 bisa "100% hijau"
+### 9.1 Aksi yang tersisa (semuanya di dashboard Supabase)
 
-1. **Jalankan migrasi** `supabase/migrations/0001_users.sql` di SQL Editor Supabase
-   (atau `supabase link` + `supabase db push`). Setelah itu 3 test yang di-skip
-   otomatis aktif (`pnpm exec playwright test`).
-2. **Aktifkan provider** di Authentication → Providers:
-   - GitHub: pakai `GITHUB_OAUTH_CLIENT_ID`/`GITHUB_OAUTH_CLIENT_SECRET` dari `.env`.
-   - Google: butuh Client ID/Secret baru (tidak ada di `.env`).
-3. **URL Configuration**: Site URL `http://localhost:5173`,
+✅ **Migrasi sudah dijalankan user** — tabel `public.users`, RLS, trigger, dan
+`on delete cascade` sudah diverifikasi langsung ke project (§7.6). Sisa 2 langkah:
+
+1. **Aktifkan provider OAuth** — Authentication → Providers. Status saat ini
+   (diverifikasi lewat `/auth/v1/settings`): `google_enabled=false`,
+   `github_enabled=false`.
+   - **Google**: enable, isi Client ID `GOOGLE_CLIENT_ID` dan Client Secret
+     `GOOGLE_CLIENT_SECRET` yang sudah ada di `.env`. Di Google Cloud Console →
+     Credentials, Authorized redirect URI harus berisi
+     `https://inlejkrqixxpcxniraos.supabase.co/auth/v1/callback`.
+   - **GitHub**: enable, isi Client ID/Secret dari `.env`
+     (`GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`). Di GitHub OAuth App,
+     Authorization callback URL harus
+     `https://inlejkrqixxpcxniraos.supabase.co/auth/v1/callback`.
+
+   Catatan: kredensial OAuth **tidak** dibaca aplikasi ini dari `.env` — penukaran
+   token dilakukan Supabase Auth. Karena itu nilainya sengaja tidak dimasukkan ke
+   `envPrefix` di `vite.config.ts` dan tidak pernah sampai ke browser.
+2. **Authentication → URL Configuration**: Site URL `http://localhost:5173` dan
    Redirect URLs `http://localhost:5173/auth/callback` (+ domain produksi).
    Tanpa ini, `redirectTo` OAuth/email akan jatuh ke Site URL.
-4. Opsional untuk development: matikan "Confirm email" agar signup langsung
-   menghasilkan session.
 
-### 9.2 Temuan yang sebaiknya ditindaklanjuti
+Setelah keduanya aktif, jalankan `pnpm exec playwright test`: test login penuh
+Google/GitHub (K1.3, K1.4, K4.7) siap diverifikasi.
+
+### 9.2 Kuota email Supabase (menghambat test signup lewat form)
+
+Signup lewat form memicu email konfirmasi, dan SMTP bawaan Supabase punya kuota
+sangat kecil per jam. Saat kuota habis, API menjawab
+`over_email_send_rate_limit` dan test signup di-skip (bukan gagal) dengan alasan
+jelas. Pilihan agar test selalu berjalan penuh:
+
+1. Pasang SMTP sendiri (Authentication → SMTP Settings) — paling realistis untuk
+   produksi, atau
+2. Naikkan batas di Authentication → Rate Limits, atau
+3. Matikan "Confirm email" (Authentication → Providers → Email). Ingat: dengan
+   konfirmasi mati, signup langsung menghasilkan session sehingga jalur
+   `emailRedirectTo` tidak lagi diuji.
+
+### 9.3 Temuan yang sebaiknya ditindaklanjuti
 
 - **Keamanan RLS**: policy `users_update_own` (sesuai PRD) mengizinkan user
   mengubah `plan` dan `credits` miliknya sendiri. Versi yang lebih ketat sudah

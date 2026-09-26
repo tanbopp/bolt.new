@@ -14,6 +14,9 @@ export type SupabaseTestEnv = {
   url: string;
   anonKey: string;
   serviceRoleKey: string;
+
+  /** Domain email untuk user test (lihat `uniqueTestEmail`). */
+  emailDomain: string;
 };
 
 export type TestAuthUser = {
@@ -68,14 +71,42 @@ export function supabaseTestEnv(): SupabaseTestEnv {
     throw new Error('SUPABASE_URL, SUPABASE_ANON_KEY, dan SUPABASE_SERVICE_ROLE_KEY wajib ada di .env.local');
   }
 
-  cachedEnv = { url, anonKey, serviceRoleKey };
+  /**
+   * Supabase Auth **menolak domain reserved** seperti `example.com`
+   * (`email_address_invalid`), jadi email test memakai domain milik project
+   * (`CLOUDFLARE_ROOT_DOMAIN` — env yang sudah ada, tanpa nama env baru).
+   * Fallback `gmail.com` dipakai bila env itu kosong.
+   */
+  const emailDomain = parsed.CLOUDFLARE_ROOT_DOMAIN || 'gmail.com';
+
+  cachedEnv = { url, anonKey, serviceRoleKey, emailDomain };
 
   return cachedEnv;
 }
 
 /** Email unik per test supaya test independen (CONVENTIONS.md §11). */
 export function uniqueTestEmail(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}@example.com`;
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}@${supabaseTestEnv().emailDomain}`;
+}
+
+/**
+ * Supabase membatasi jumlah **email yang dikirim** dan jumlah request auth
+ * (default project: kuota kecil per jam). Signup lewat UI memicu kirim email
+ * konfirmasi sehingga test bisa kena `over_email_send_rate_limit` /
+ * `over_request_rate_limit` — itu keterbatasan environment, bukan bug aplikasi,
+ * jadi test yang bersangkutan di-skip dengan alasan yang jelas.
+ *
+ * Dua bentuk pesan dikenali: pesan asli Supabase (Inggris) dan hasil pemetaan
+ * `mapAuthErrorMessage()` di aplikasi (Indonesia).
+ */
+export function isEmailRateLimitMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes('rate limit') ||
+    normalized.includes('over_email_send_rate_limit') ||
+    normalized.includes('terlalu banyak percobaan')
+  );
 }
 
 /**

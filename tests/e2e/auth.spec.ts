@@ -7,6 +7,7 @@ import {
   fetchProfilesWithUserToken,
   findUserByEmail,
   gotoHydrated,
+  isEmailRateLimitMessage,
   isProfileTableReady,
   signInForAccessToken,
   uniqueTestEmail,
@@ -70,7 +71,39 @@ test('login dengan password salah menampilkan toast error', async ({ page }) => 
   await expect(page).toHaveURL(/\/login/);
 });
 
-/** K1.1 — signup lewat form membuat baris di public.users (via trigger) */
+/** K1.1 (bagian DB) — trigger mengisi public.users + `on delete cascade` */
+test('user baru otomatis mendapat baris profil di public.users', async () => {
+  test.skip(!profileTableReady, 'Tabel public.users belum ada (migrasi 0001_users.sql belum dijalankan)');
+
+  const user = await createConfirmedUser({
+    email: uniqueTestEmail('trigger'),
+    password: PASSWORD,
+    name: 'E2E Trigger',
+  });
+
+  const profile = await fetchProfileRow(user.id);
+
+  expect(profile, 'trigger on_auth_user_created harus membuat baris public.users').not.toBeNull();
+  expect(profile?.email).toBe(user.email);
+  expect(profile?.name).toBe('E2E Trigger');
+  expect(profile?.plan).toBe('free');
+  expect(profile?.credits).toBe(100);
+
+  await deleteUser(user.id);
+
+  const afterDelete = await fetchProfileRow(user.id);
+
+  expect(afterDelete, 'on delete cascade harus ikut menghapus baris profil').toBeNull();
+});
+
+/**
+ * K1.1 — signup lewat form membuat baris di public.users (via trigger).
+ *
+ * Signup publik memicu **kirim email konfirmasi**; bila kuota email project
+ * sedang habis (`over_email_send_rate_limit`, lihat
+ * `notes/TAHAPAN-1-NOTES.md` §9) test ini di-skip dengan alasan eksplisit —
+ * mekanisme trigger-nya sendiri sudah diverifikasi test sebelumnya.
+ */
 test('signup email/password membuat profil di public.users', async ({ page }) => {
   test.skip(!profileTableReady, 'Tabel public.users belum ada (migrasi 0001_users.sql belum dijalankan)');
 
@@ -82,7 +115,18 @@ test('signup email/password membuat profil di public.users', async ({ page }) =>
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Daftar' }).click();
 
-  await expect(page.getByText(/cek email/i)).toBeVisible();
+  const notice = page.getByText(/cek email/i);
+  const toast = page.getByRole('status');
+
+  await expect(notice.or(toast).first()).toBeVisible({ timeout: 30_000 });
+
+  if ((await notice.count()) === 0) {
+    const toastText = await toast.first().innerText();
+
+    test.skip(isEmailRateLimitMessage(toastText), `Kuota email Supabase habis: ${toastText}`);
+
+    throw new Error(`Signup gagal: ${toastText}`);
+  }
 
   const authUser = await findUserByEmail(email);
   expect(authUser, 'user auth.users harus terbentuk setelah signup').not.toBeNull();
